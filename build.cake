@@ -1,4 +1,4 @@
-#tool nuget:?package=NUnit.Runners&version=2.6.4
+#tool nuget:?package=NUnit.ConsoleRunner&version=3.8.0
 
 // Input args
 string target = Argument("target", "Default");
@@ -16,7 +16,39 @@ var dirs = new[]
     Directory("./Xamarin.Forms.Mocks.Xaml/obj") + Directory(configuration),
 };
 string sln = "./Xamarin.Forms.Mocks.sln";
-string version = "2.5.0.4";
+string version = "3.5.0.2";
+string suffix = "";
+
+MSBuildSettings MSBuildSettings()
+{
+    var settings = new MSBuildSettings { Configuration = configuration };
+
+    if (IsRunningOnWindows())
+    {
+        // Find MSBuild for Visual Studio 2019 and newer
+        DirectoryPath vsLatest = VSWhereLatest();
+        FilePath msBuildPath = vsLatest?.CombineWithFilePath("./MSBuild/Current/Bin/MSBuild.exe");
+
+        // Find MSBuild for Visual Studio 2017
+        if (msBuildPath != null && !FileExists(msBuildPath))
+            msBuildPath = vsLatest.CombineWithFilePath("./MSBuild/15.0/Bin/MSBuild.exe");
+
+        // Have we found MSBuild yet?
+        if (!FileExists(msBuildPath))
+        {
+            throw new Exception($"Failed to find MSBuild: {msBuildPath}");
+        }
+
+        Information("Building using MSBuild at " + msBuildPath);
+        settings.ToolPath = msBuildPath;
+    }
+    else
+    {
+        settings.ToolPath = Context.Tools.Resolve("msbuild");
+    }
+
+    return settings.WithRestore();
+}
 
 Task("Clean")
     .Does(() =>
@@ -25,25 +57,18 @@ Task("Clean")
             CleanDirectory(dir);
     });
 
-Task("Restore-NuGet-Packages")
+Task("Build")
     .IsDependentOn("Clean")
     .Does(() =>
     {
-        NuGetRestore(sln);
-    });
-
-Task("Build")
-    .IsDependentOn("Restore-NuGet-Packages")
-    .Does(() =>
-    {
-        MSBuild(sln, settings => settings.SetConfiguration(configuration));
+        MSBuild(sln, MSBuildSettings());
     });
 
 Task("NUnit")
     .IsDependentOn("Build")
     .Does(() =>
     {
-        NUnit(dirs[2] + File("Xamarin.Forms.Mocks.Tests.dll"));
+        NUnit3(dirs[2] + File("./net461/Xamarin.Forms.Mocks.Tests.dll"));
     });
 
 Task("NuGet-Package")
@@ -53,7 +78,7 @@ Task("NuGet-Package")
         var settings   = new NuGetPackSettings
         {
             Verbosity = NuGetVerbosity.Detailed,
-            Version = version,
+            Version = version + suffix,
             Files = new [] 
             {
                 new NuSpecContent { Source = dirs[1] + File("netstandard2.0/Xamarin.Forms.Core.UnitTests.dll"), Target = "lib/netstandard2.0" },
@@ -66,12 +91,11 @@ Task("NuGet-Package")
     });
 
 Task("NuGet-Push")
-    .IsDependentOn("NuGet-Package")
     .Does(() =>
     {
         var apiKey = TransformTextFile ("./.nugetapikey").ToString();
 
-        NuGetPush("./build/Xamarin.Forms.Mocks." + version + ".nupkg", new NuGetPushSettings 
+        NuGetPush("./build/Xamarin.Forms.Mocks." + version + suffix + ".nupkg", new NuGetPushSettings 
         {
             Verbosity = NuGetVerbosity.Detailed,
             Source = "nuget.org",
@@ -80,6 +104,6 @@ Task("NuGet-Push")
     });
 
 Task("Default")
-    .IsDependentOn("NuGet-Push");
+    .IsDependentOn("NuGet-Package");
 
 RunTarget(target);
